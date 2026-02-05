@@ -11,6 +11,7 @@ import {
   createSearchCommand,
   createSyncCommand,
   createLabelsCommand,
+  createLabelCommand,
 } from './commands';
 import { EXIT_CODES } from './types';
 
@@ -44,6 +45,7 @@ export function createProgram(): Command {
   program.addCommand(createSearchCommand());
   program.addCommand(createSyncCommand());
   program.addCommand(createLabelsCommand());
+  program.addCommand(createLabelCommand());
 
   // Handle unknown commands
   program.on('command:*', (operands: string[]) => {
