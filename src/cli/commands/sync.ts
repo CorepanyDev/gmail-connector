@@ -16,40 +16,7 @@ import {
 import type { MessageInput, LabelInput } from '../../cache';
 import type { GlobalOptions } from '../types';
 import { EXIT_CODES } from '../types';
-
-/**
- * Progress display interface
- */
-interface ProgressDisplay {
-  update(current: number, total: number, message?: string): void;
-  finish(message: string): void;
-}
-
-/**
- * Create a simple progress display
- */
-function createProgressDisplay(verbose: boolean): ProgressDisplay {
-  let lastPercent = -1;
-
-  return {
-    update(current: number, total: number, message?: string): void {
-      if (total === 0) return;
-      const percent = Math.floor((current / total) * 100);
-
-      // Only update every 5% or if verbose mode
-      if (percent !== lastPercent && (percent % 5 === 0 || verbose)) {
-        lastPercent = percent;
-        const bar = '='.repeat(Math.floor(percent / 5)) + ' '.repeat(20 - Math.floor(percent / 5));
-        const msg = message ? ` - ${message}` : '';
-        process.stdout.write(`\r[${bar}] ${percent}% (${current}/${total})${msg}      `);
-      }
-    },
-    finish(message: string): void {
-      process.stdout.write('\r' + ' '.repeat(80) + '\r'); // Clear line
-      console.log(message);
-    },
-  };
-}
+import { createProgressBar, type ProgressBar } from '../utils';
 
 /**
  * Extract header value from message headers
@@ -130,7 +97,7 @@ function labelToInput(label: gmail_v1.Schema$Label): LabelInput {
 async function performFullSync(
   messages: gmail_v1.Resource$Users$Messages,
   messageRepo: MessageRepository,
-  progress: ProgressDisplay,
+  progress: ProgressBar,
   verbose: boolean
 ): Promise<{ synced: number; historyId: string | null }> {
   let pageToken: string | undefined;
@@ -151,6 +118,7 @@ async function performFullSync(
 
   // Fetch all message IDs first (more efficient)
   const allMessageIds: string[] = [];
+  progress.start(estimatedTotal, 'Listing messages');
 
   do {
     const listResponse = await messages.list({
@@ -163,20 +131,20 @@ async function performFullSync(
     allMessageIds.push(...messageList.map((m) => m.id!).filter(Boolean));
 
     pageToken = listResponse.data.nextPageToken ?? undefined;
-    progress.update(allMessageIds.length, estimatedTotal, 'Listing messages');
+    progress.update(allMessageIds.length, 'Listing messages');
 
   } while (pageToken);
 
-  progress.finish(`Found ${allMessageIds.length} messages to sync`);
+  progress.stop(`Found ${allMessageIds.length} messages to sync`);
 
   // Now fetch full details in batches
   const batchSize = 50;
   const messageBatches: MessageInput[][] = [];
+  const detailProgress = createProgressBar({ verbose, threshold: 0, showEta: true });
+  detailProgress.start(allMessageIds.length, 'Fetching details');
 
   for (let i = 0; i < allMessageIds.length; i += batchSize) {
     const batch = allMessageIds.slice(i, i + batchSize);
-
-    progress.update(i, allMessageIds.length, 'Fetching details');
 
     const detailPromises = batch.map(async (id) => {
       try {
@@ -209,9 +177,11 @@ async function performFullSync(
       messageBatches.push(validMessages);
       totalFetched += validMessages.length;
     }
+
+    detailProgress.update(Math.min(i + batchSize, allMessageIds.length), 'Fetching details');
   }
 
-  progress.finish(`Fetched ${totalFetched} messages`);
+  detailProgress.stop(`Fetched ${totalFetched} messages`);
 
   // Save all messages to cache
   console.log('Saving to cache...');
@@ -230,7 +200,7 @@ async function performIncrementalSync(
   messages: gmail_v1.Resource$Users$Messages,
   messageRepo: MessageRepository,
   startHistoryId: string,
-  progress: ProgressDisplay,
+  progress: ProgressBar,
   verbose: boolean
 ): Promise<{ added: number; deleted: number; historyId: string | null }> {
   let pageToken: string | undefined;
@@ -309,14 +279,16 @@ async function performIncrementalSync(
   // Delete messages
   if (uniqueToDelete.length > 0) {
     deleted = messageRepo.deleteMany(uniqueToDelete);
-    progress.update(deleted, uniqueToDelete.length, 'Deleting');
   }
 
   // Fetch and add/update messages
+  if (uniqueToAdd.length > 0) {
+    progress.start(uniqueToAdd.length, 'Syncing changes');
+  }
+
   const batchSize = 50;
   for (let i = 0; i < uniqueToAdd.length; i += batchSize) {
     const batch = uniqueToAdd.slice(i, i + batchSize);
-    progress.update(i, uniqueToAdd.length, 'Syncing changes');
 
     const detailPromises = batch.map(async (id) => {
       try {
@@ -349,6 +321,8 @@ async function performIncrementalSync(
       messageRepo.upsertMany(validMessages);
       added += validMessages.length;
     }
+
+    progress.update(Math.min(i + batchSize, uniqueToAdd.length), 'Syncing changes');
   }
 
   // Delete any messages that were not found (404)
@@ -358,7 +332,7 @@ async function performIncrementalSync(
     deleted += additionalDeletes.length;
   }
 
-  progress.finish(`Synced ${added} changes, deleted ${deleted} messages`);
+  progress.stop(`Synced ${added} changes, deleted ${deleted} messages`);
 
   return { added, deleted, historyId: latestHistoryId };
 }
@@ -467,8 +441,8 @@ export function createSyncCommand(): Command {
           const labelsApi = await gmail.getLabels();
           const historyApi = await gmail.getHistory();
 
-          // Create progress display
-          const progress = createProgressDisplay(verbose);
+          // Create progress bar
+          const progress = createProgressBar({ verbose, threshold: 0, showEta: true });
 
           // Sync labels first
           console.log('Syncing labels...');

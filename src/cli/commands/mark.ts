@@ -8,6 +8,7 @@ import type { gmail_v1 } from 'googleapis';
 import { getGmailService, GmailServiceError } from '../../gmail';
 import type { GlobalOptions } from '../types';
 import { EXIT_CODES } from '../types';
+import { createProgressBar } from '../utils';
 
 /**
  * Get message IDs from various input methods
@@ -83,6 +84,10 @@ async function markAsRead(
   const batchSize = 10;
   const unreadLabelId = 'UNREAD';
 
+  // Create progress bar for bulk operations
+  const progress = createProgressBar({ verbose, threshold: 20, showEta: true });
+  progress.start(messageIds.length, 'Marking as read');
+
   for (let i = 0; i < messageIds.length; i += batchSize) {
     const batch = messageIds.slice(i, i + batchSize);
 
@@ -109,12 +114,10 @@ async function markAsRead(
     success += results.filter(Boolean).length;
     failed += results.filter((r) => !r).length;
 
-    // Show progress for large operations
-    if (messageIds.length > 20 && (i + batchSize) % 50 === 0) {
-      const progress = Math.min(i + batchSize, messageIds.length);
-      console.log(`  Progress: ${progress}/${messageIds.length} messages processed`);
-    }
+    progress.update(Math.min(i + batchSize, messageIds.length));
   }
+
+  progress.stop();
 
   return { success, failed };
 }
@@ -131,6 +134,10 @@ async function markAsUnread(
   let failed = 0;
   const batchSize = 10;
   const unreadLabelId = 'UNREAD';
+
+  // Create progress bar for bulk operations
+  const progress = createProgressBar({ verbose, threshold: 20, showEta: true });
+  progress.start(messageIds.length, 'Marking as unread');
 
   for (let i = 0; i < messageIds.length; i += batchSize) {
     const batch = messageIds.slice(i, i + batchSize);
@@ -158,12 +165,10 @@ async function markAsUnread(
     success += results.filter(Boolean).length;
     failed += results.filter((r) => !r).length;
 
-    // Show progress for large operations
-    if (messageIds.length > 20 && (i + batchSize) % 50 === 0) {
-      const progress = Math.min(i + batchSize, messageIds.length);
-      console.log(`  Progress: ${progress}/${messageIds.length} messages processed`);
-    }
+    progress.update(Math.min(i + batchSize, messageIds.length));
   }
+
+  progress.stop();
 
   return { success, failed };
 }
