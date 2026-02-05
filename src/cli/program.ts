@@ -19,6 +19,9 @@ import {
   createAnalyzeCommand,
   createUnsubscribeCommand,
   createStatsCommand,
+  createDownloadCommand,
+  createTasksCommand,
+  createCalendarCommand,
 } from './commands';
 import { EXIT_CODES } from './types';
 
@@ -60,6 +63,9 @@ export function createProgram(): Command {
   program.addCommand(createAnalyzeCommand());
   program.addCommand(createUnsubscribeCommand());
   program.addCommand(createStatsCommand());
+  program.addCommand(createDownloadCommand());
+  program.addCommand(createTasksCommand());
+  program.addCommand(createCalendarCommand());
 
   // Handle unknown commands
   program.on('command:*', (operands: string[]) => {

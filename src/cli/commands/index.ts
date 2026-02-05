@@ -16,3 +16,6 @@ export { createCleanupCommand } from './cleanup';
 export { createAnalyzeCommand } from './analyze';
 export { createUnsubscribeCommand } from './unsubscribe';
 export { createStatsCommand } from './stats';
+export { createDownloadCommand } from './download';
+export { createTasksCommand } from './tasks';
+export { createCalendarCommand } from './calendar';
