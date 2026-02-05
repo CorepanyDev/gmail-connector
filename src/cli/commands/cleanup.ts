@@ -173,10 +173,104 @@ interface MessageDetails {
 }
 
 /**
+ * Message details for old emails display (includes age)
+ */
+interface OldMessageDetails {
+  id: string;
+  from: string;
+  subject: string;
+  date: string;
+  age: string;
+}
+
+/**
+ * Parse age string to milliseconds
+ * Supports: d (days), w (weeks), m (months), y (years)
+ */
+function parseAge(ageStr: string): { milliseconds: number; gmailQuery: string } {
+  const match = ageStr.toLowerCase().match(/^(\d+)(d|w|m|y)$/);
+  if (!match) {
+    throw new Error(
+      `Invalid age format: ${ageStr}. Use format like "90d", "6m", "1y", "2w"`
+    );
+  }
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+
+  // Calculate milliseconds
+  const msPerDay = 24 * 60 * 60 * 1000;
+  let milliseconds: number;
+  let gmailQuery: string;
+
+  switch (unit) {
+    case 'd':
+      milliseconds = value * msPerDay;
+      gmailQuery = `older_than:${value}d`;
+      break;
+    case 'w':
+      milliseconds = value * 7 * msPerDay;
+      // Gmail uses days, so convert weeks to days for query
+      gmailQuery = `older_than:${value * 7}d`;
+      break;
+    case 'm':
+      milliseconds = value * 30 * msPerDay; // Approximate
+      gmailQuery = `older_than:${value}m`;
+      break;
+    case 'y':
+      milliseconds = value * 365 * msPerDay; // Approximate
+      gmailQuery = `older_than:${value}y`;
+      break;
+    default:
+      throw new Error(`Invalid age unit: ${unit}`);
+  }
+
+  return { milliseconds, gmailQuery };
+}
+
+/**
+ * Format age from date to human-readable string
+ */
+function formatAge(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+
+  if (diffDays < 7) {
+    return `${diffDays}d`;
+  } else if (diffDays < 30) {
+    const weeks = Math.floor(diffDays / 7);
+    return `${weeks}w`;
+  } else if (diffDays < 365) {
+    const months = Math.floor(diffDays / 30);
+    return `${months}m`;
+  } else {
+    const years = Math.floor(diffDays / 365);
+    const remainingMonths = Math.floor((diffDays % 365) / 30);
+    if (remainingMonths > 0) {
+      return `${years}y ${remainingMonths}m`;
+    }
+    return `${years}y`;
+  }
+}
+
+/**
  * Cleanup large command options
  */
 interface CleanupLargeOptions {
   largerThan: string;
+  limit?: string;
+  delete?: boolean;
+  yes?: boolean;
+}
+
+/**
+ * Cleanup old command options
+ */
+interface CleanupOldOptions {
+  olderThan: string;
+  label?: string;
   limit?: string;
   delete?: boolean;
   yes?: boolean;
@@ -392,6 +486,257 @@ export function createCleanupCommand(): Command {
           if (!options.yes && displayMessages.length > 1) {
             const confirmed = await askConfirmation(
               `Are you sure you want to trash ${displayMessages.length} email(s)?`
+            );
+            if (!confirmed) {
+              console.log('Operation cancelled.');
+              process.exit(EXIT_CODES.SUCCESS);
+            }
+          }
+
+          console.log(`Trashing ${displayMessages.length} email(s)...`);
+
+          const idsToTrash = displayMessages.map((msg) => msg.id);
+          const result = await trashMessages(idsToTrash, messagesApi, globalOpts.verbose);
+
+          if (result.success > 0) {
+            console.log(`Successfully trashed ${result.success} email(s).`);
+          }
+          if (result.failed > 0) {
+            console.error(`Failed to trash ${result.failed} email(s).`);
+            process.exit(EXIT_CODES.ERROR);
+          }
+        }
+
+        process.exit(EXIT_CODES.SUCCESS);
+      } catch (err) {
+        if (err instanceof GmailServiceError) {
+          console.error(`Error: ${err.message}`);
+          if (err.code === 'not_authenticated') {
+            process.exit(EXIT_CODES.AUTHENTICATION_REQUIRED);
+          }
+        } else if (err instanceof Error) {
+          console.error(`Error: ${err.message}`);
+          if (globalOpts.verbose && err.stack) {
+            console.error(err.stack);
+          }
+        } else {
+          console.error('An unknown error occurred');
+        }
+        process.exit(EXIT_CODES.ERROR);
+      }
+    });
+
+  // Cleanup old subcommand
+  cleanup
+    .command('old')
+    .description('Find old emails for cleanup')
+    .option('--older-than <age>', 'Minimum age (e.g., 90d, 6m, 1y, 2w)', '1y')
+    .option('--label <label>', 'Filter to specific label')
+    .option('--limit <count>', 'Maximum number of results to show', '50')
+    .option('--delete', 'Trash found emails (with confirmation)')
+    .option('-y, --yes', 'Skip confirmation when using --delete')
+    .action(async (options: CleanupOldOptions, cmd: Command) => {
+      const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
+
+      if (globalOpts.verbose) {
+        console.log('Cleanup old options:', { ...options, config: globalOpts.config });
+      }
+
+      try {
+        // Parse age threshold
+        let ageThreshold: { milliseconds: number; gmailQuery: string };
+        try {
+          ageThreshold = parseAge(options.olderThan);
+        } catch (err) {
+          console.error(`Error: ${err instanceof Error ? err.message : 'Invalid age'}`);
+          console.error('');
+          console.error('Examples of valid ages:');
+          console.error('  --older-than 90d   (90 days)');
+          console.error('  --older-than 6m    (6 months)');
+          console.error('  --older-than 1y    (1 year)');
+          console.error('  --older-than 2w    (2 weeks)');
+          process.exit(EXIT_CODES.INVALID_ARGUMENT);
+        }
+
+        // Parse limit
+        const limit = parseInt(options.limit ?? '50', 10);
+        if (isNaN(limit) || limit < 1) {
+          console.error('Error: --limit must be a positive integer');
+          process.exit(EXIT_CODES.INVALID_ARGUMENT);
+        }
+
+        // Get Gmail service
+        const gmail = getGmailService({
+          credentialsPath: globalOpts.config,
+          verbose: globalOpts.verbose,
+        });
+
+        // Check authentication
+        const isAuthenticated = await gmail.isAuthenticated();
+        if (!isAuthenticated) {
+          console.error(
+            'Error: Not authenticated. Please run: gmail-connector auth login'
+          );
+          process.exit(EXIT_CODES.AUTHENTICATION_REQUIRED);
+        }
+
+        // Get messages resource
+        const messagesApi = await gmail.getMessages();
+
+        // Build query with age filter and optional label filter
+        let query = ageThreshold.gmailQuery;
+        if (options.label) {
+          // Handle special labels like INBOX, SENT, etc.
+          const labelQuery = options.label.toUpperCase() === options.label
+            ? `in:${options.label.toLowerCase()}`
+            : `label:${options.label}`;
+          query = `${query} ${labelQuery}`;
+        }
+
+        if (globalOpts.verbose) {
+          console.log(`Searching with query: "${query}"`);
+        }
+
+        console.log(`Finding emails older than ${options.olderThan}${options.label ? ` in "${options.label}"` : ''}...`);
+
+        // Fetch message IDs matching age criteria
+        let pageToken: string | undefined;
+        const messageIds: string[] = [];
+        const maxToFetch = limit * 2; // Fetch extra in case some fail to get details
+
+        do {
+          const response = await messagesApi.list({
+            userId: 'me',
+            q: query,
+            maxResults: Math.min(500, maxToFetch - messageIds.length),
+            pageToken,
+          });
+
+          const msgList = response.data.messages ?? [];
+          for (const msg of msgList) {
+            if (msg.id) {
+              messageIds.push(msg.id);
+            }
+          }
+
+          pageToken = response.data.nextPageToken ?? undefined;
+
+          if (globalOpts.verbose && pageToken) {
+            console.log(`  Fetched ${messageIds.length} message IDs, continuing...`);
+          }
+        } while (pageToken && messageIds.length < maxToFetch);
+
+        if (messageIds.length === 0) {
+          console.log(`No emails found older than ${options.olderThan}${options.label ? ` in "${options.label}"` : ''}.`);
+          process.exit(EXIT_CODES.SUCCESS);
+        }
+
+        if (globalOpts.verbose) {
+          console.log(`Found ${messageIds.length} candidate messages, fetching details...`);
+        }
+
+        // Calculate cutoff date for verification
+        const cutoffDate = new Date(Date.now() - ageThreshold.milliseconds);
+
+        // Fetch message details in batches
+        const messageDetails: OldMessageDetails[] = [];
+        const batchSize = 10;
+
+        for (let i = 0; i < Math.min(messageIds.length, maxToFetch); i += batchSize) {
+          const batch = messageIds.slice(i, i + batchSize);
+
+          const promises = batch.map(async (messageId) => {
+            try {
+              const response = await messagesApi.get({
+                userId: 'me',
+                id: messageId,
+                format: 'metadata',
+                metadataHeaders: ['From', 'Subject', 'Date'],
+              });
+
+              const msg = response.data;
+              const headers = msg.payload?.headers;
+              const dateStr = getHeader(headers, 'Date');
+              const emailDate = new Date(dateStr);
+
+              // Double check date threshold (for accuracy)
+              if (emailDate > cutoffDate) {
+                return null;
+              }
+
+              return {
+                id: messageId,
+                from: extractEmail(getHeader(headers, 'From')),
+                subject: getHeader(headers, 'Subject') || '(no subject)',
+                date: dateStr,
+                age: formatAge(dateStr),
+              };
+            } catch {
+              return null;
+            }
+          });
+
+          const results = await Promise.all(promises);
+          for (const result of results) {
+            if (result) {
+              messageDetails.push(result);
+            }
+          }
+
+          if (globalOpts.verbose && i > 0 && i % 50 === 0) {
+            console.log(`  Processed ${i}/${messageIds.length} messages...`);
+          }
+        }
+
+        // Sort by date ascending (oldest first)
+        messageDetails.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+        // Take only up to limit
+        const displayMessages = messageDetails.slice(0, limit);
+
+        if (displayMessages.length === 0) {
+          console.log(`No emails found older than ${options.olderThan}${options.label ? ` in "${options.label}"` : ''}.`);
+          process.exit(EXIT_CODES.SUCCESS);
+        }
+
+        // Display results
+        console.log('');
+        console.log(`Found ${displayMessages.length} old email(s):`);
+        console.log('');
+
+        // Table header
+        const colWidths = { from: 30, subject: 40, date: 12, age: 10 };
+        const headerLine = [
+          'FROM'.padEnd(colWidths.from),
+          'SUBJECT'.padEnd(colWidths.subject),
+          'DATE'.padEnd(colWidths.date),
+          'AGE'.padStart(colWidths.age),
+        ].join('  ');
+
+        console.log(headerLine);
+        console.log('─'.repeat(headerLine.length));
+
+        // Table rows
+        for (const msg of displayMessages) {
+          const row = [
+            truncate(msg.from, colWidths.from).padEnd(colWidths.from),
+            truncate(msg.subject, colWidths.subject).padEnd(colWidths.subject),
+            formatDate(msg.date).padEnd(colWidths.date),
+            msg.age.padStart(colWidths.age),
+          ].join('  ');
+          console.log(row);
+        }
+
+        console.log('');
+
+        // Handle --delete flag
+        if (options.delete) {
+          console.log('');
+
+          // Confirmation (unless --yes)
+          if (!options.yes && displayMessages.length > 1) {
+            const confirmed = await askConfirmation(
+              `Are you sure you want to trash ${displayMessages.length} old email(s)?`
             );
             if (!confirmed) {
               console.log('Operation cancelled.');
