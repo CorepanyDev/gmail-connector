@@ -14,3 +14,4 @@ export { createMarkCommand } from './mark';
 export { createTrashCommand } from './trash';
 export { createCleanupCommand } from './cleanup';
 export { createAnalyzeCommand } from './analyze';
+export { createUnsubscribeCommand } from './unsubscribe';
