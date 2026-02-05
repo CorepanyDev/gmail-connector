@@ -146,13 +146,235 @@ interface TrashOptions {
 }
 
 /**
+ * Empty trash command options
+ */
+interface EmptyTrashOptions {
+  confirm?: boolean;
+}
+
+/**
+ * Get count of messages in trash
+ */
+async function getTrashCount(
+  messages: gmail_v1.Resource$Users$Messages
+): Promise<number> {
+  const response = await messages.list({
+    userId: 'me',
+    q: 'in:trash',
+    maxResults: 1,
+  });
+  return response.data.resultSizeEstimate ?? 0;
+}
+
+/**
+ * Get all message IDs in trash
+ */
+async function getTrashMessageIds(
+  messages: gmail_v1.Resource$Users$Messages,
+  verbose: boolean
+): Promise<string[]> {
+  const messageIds: string[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const response = await messages.list({
+      userId: 'me',
+      q: 'in:trash',
+      maxResults: 500,
+      pageToken,
+    });
+
+    const msgList = response.data.messages ?? [];
+    for (const msg of msgList) {
+      if (msg.id) {
+        messageIds.push(msg.id);
+      }
+    }
+
+    pageToken = response.data.nextPageToken ?? undefined;
+
+    if (verbose && pageToken) {
+      console.log(`  Fetched ${messageIds.length} message IDs, continuing...`);
+    }
+  } while (pageToken);
+
+  return messageIds;
+}
+
+/**
+ * Permanently delete messages
+ */
+async function deleteMessagesPermanently(
+  messageIds: string[],
+  messages: gmail_v1.Resource$Users$Messages,
+  verbose: boolean
+): Promise<{ success: number; failed: number }> {
+  let success = 0;
+  let failed = 0;
+  const batchSize = 10;
+
+  for (let i = 0; i < messageIds.length; i += batchSize) {
+    const batch = messageIds.slice(i, i + batchSize);
+
+    const promises = batch.map(async (messageId) => {
+      try {
+        await messages.delete({
+          userId: 'me',
+          id: messageId,
+        });
+        return true;
+      } catch (err) {
+        if (verbose) {
+          const errMsg = err instanceof Error ? err.message : 'Unknown error';
+          console.error(`  Failed to delete message ${messageId}: ${errMsg}`);
+        }
+        return false;
+      }
+    });
+
+    const results = await Promise.all(promises);
+    success += results.filter(Boolean).length;
+    failed += results.filter((r) => !r).length;
+
+    // Show progress for large operations
+    if (messageIds.length > 20 && (i + batchSize) % 50 === 0) {
+      const progress = Math.min(i + batchSize, messageIds.length);
+      console.log(`  Progress: ${progress}/${messageIds.length} messages deleted`);
+    }
+  }
+
+  return { success, failed };
+}
+
+/**
  * Create the trash command
  */
 export function createTrashCommand(): Command {
   const trash = new Command('trash')
-    .description('Move emails to trash');
+    .description('Move emails to trash or empty trash');
 
-  // Main trash action (move to trash)
+  // Empty trash subcommand
+  trash
+    .command('empty')
+    .description('Permanently delete all emails in trash')
+    .option('--confirm', 'Confirm permanent deletion (required)')
+    .action(async (options: EmptyTrashOptions, cmd: Command) => {
+      const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
+
+      if (globalOpts.verbose) {
+        console.log('Empty trash options:', { ...options, config: globalOpts.config });
+      }
+
+      try {
+        // Get Gmail service
+        const gmail = getGmailService({
+          credentialsPath: globalOpts.config,
+          verbose: globalOpts.verbose,
+        });
+
+        // Check authentication
+        const isAuthenticated = await gmail.isAuthenticated();
+        if (!isAuthenticated) {
+          console.error(
+            'Error: Not authenticated. Please run: gmail-connector auth login'
+          );
+          process.exit(EXIT_CODES.AUTHENTICATION_REQUIRED);
+        }
+
+        // Get messages resource
+        const messages = await gmail.getMessages();
+
+        // Get count of emails in trash
+        const trashCount = await getTrashCount(messages);
+
+        if (trashCount === 0) {
+          console.log('Trash is empty. Nothing to delete.');
+          process.exit(EXIT_CODES.SUCCESS);
+        }
+
+        console.log(`Found approximately ${trashCount} email(s) in trash.`);
+
+        // Require explicit --confirm flag
+        if (!options.confirm) {
+          console.error('');
+          console.error('⚠️  WARNING: This action is PERMANENT and IRREVERSIBLE!');
+          console.error('');
+          console.error('To proceed, run with --confirm flag:');
+          console.error('  gmail-connector trash empty --confirm');
+          process.exit(EXIT_CODES.INVALID_ARGUMENT);
+        }
+
+        // Double confirmation for >100 emails
+        if (trashCount > 100) {
+          console.log('');
+          console.log('⚠️  WARNING: You are about to permanently delete over 100 emails!');
+          console.log('   This action CANNOT be undone.');
+          console.log('');
+
+          const confirmed = await askConfirmation(
+            `Type "yes" to permanently delete ~${trashCount} emails`
+          );
+          if (!confirmed) {
+            console.log('Operation cancelled.');
+            process.exit(EXIT_CODES.SUCCESS);
+          }
+
+          // Second confirmation
+          const doubleConfirmed = await askConfirmation(
+            'Are you ABSOLUTELY sure? This is your last chance to cancel'
+          );
+          if (!doubleConfirmed) {
+            console.log('Operation cancelled.');
+            process.exit(EXIT_CODES.SUCCESS);
+          }
+        }
+
+        // Fetch all message IDs from trash
+        if (globalOpts.verbose) {
+          console.log('Fetching all message IDs from trash...');
+        }
+        const messageIds = await getTrashMessageIds(messages, globalOpts.verbose);
+
+        if (messageIds.length === 0) {
+          console.log('No messages found in trash.');
+          process.exit(EXIT_CODES.SUCCESS);
+        }
+
+        console.log(`Permanently deleting ${messageIds.length} email(s)...`);
+
+        // Delete messages permanently
+        const result = await deleteMessagesPermanently(messageIds, messages, globalOpts.verbose);
+
+        // Report results
+        if (result.success > 0) {
+          console.log(`✓ Permanently deleted ${result.success} email(s).`);
+        }
+        if (result.failed > 0) {
+          console.error(`✗ Failed to delete ${result.failed} email(s).`);
+          process.exit(EXIT_CODES.ERROR);
+        }
+
+        console.log('Trash has been emptied.');
+        process.exit(EXIT_CODES.SUCCESS);
+      } catch (err) {
+        if (err instanceof GmailServiceError) {
+          console.error(`Error: ${err.message}`);
+          if (err.code === 'not_authenticated') {
+            process.exit(EXIT_CODES.AUTHENTICATION_REQUIRED);
+          }
+        } else if (err instanceof Error) {
+          console.error(`Error: ${err.message}`);
+          if (globalOpts.verbose && err.stack) {
+            console.error(err.stack);
+          }
+        } else {
+          console.error('An unknown error occurred');
+        }
+        process.exit(EXIT_CODES.ERROR);
+      }
+    });
+
+  // Main trash action (move to trash) - must be default command
   trash
     .option('--id <message-id>', 'Trash a single message')
     .option('--ids <id1,id2,...>', 'Trash multiple messages (comma-separated)')
