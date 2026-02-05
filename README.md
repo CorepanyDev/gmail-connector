@@ -1,6 +1,6 @@
 # Gmail Connector
 
-A CLI tool to manage Gmail accounts - organize, clean up, and analyze emails.
+A CLI tool to manage Gmail accounts, Google Tasks, and Google Calendar - organize, clean up, analyze emails, manage tasks, and schedule events.
 
 ## Features
 
@@ -10,6 +10,8 @@ A CLI tool to manage Gmail accounts - organize, clean up, and analyze emails.
 - **Cleanup**: Find large emails, old emails, and manage storage
 - **Sync**: Cache emails locally for faster analysis
 - **Unsubscribe**: Find and track newsletter unsubscriptions
+- **Tasks**: Manage Google Tasks — list, create, update, complete, and delete tasks
+- **Calendar**: Manage Google Calendar — list calendars, view/create/update/delete events
 
 ## Installation
 
@@ -21,10 +23,10 @@ npm link  # Makes 'gmail-connector' available globally
 
 ## Setup
 
-1. Create a Google Cloud project and enable the Gmail API
+1. Create a Google Cloud project and enable the **Gmail API**, **Google Tasks API**, and **Google Calendar API**
 2. Create OAuth 2.0 credentials (Desktop application type)
 3. Download the credentials JSON and save as `credentials.json`
-4. Run `gmail-connector auth login` to authenticate
+4. Run `gmail-connector auth login` to authenticate (grants access to Gmail, Tasks, and Calendar)
 
 ## Usage
 
@@ -65,6 +67,26 @@ gmail-connector sync --full             # Force full resync
 
 # Unsubscribe
 gmail-connector unsubscribe noreply@newsletter.com --open
+
+# Tasks
+gmail-connector tasks lists                        # List all task lists
+gmail-connector tasks list                         # List tasks in default list
+gmail-connector tasks add "Buy groceries"          # Create a task
+gmail-connector tasks add "Report" --due 2026-03-01 --notes "Q1 report"
+gmail-connector tasks complete <task-id>           # Mark task as done
+gmail-connector tasks update <task-id> --title "New title"
+gmail-connector tasks delete <task-id>             # Delete a task
+
+# Calendar
+gmail-connector calendar list                      # List all calendars
+gmail-connector calendar events                    # List upcoming events
+gmail-connector calendar events --from 2026-03-01 --to 2026-03-31
+gmail-connector calendar events --query "meeting"  # Search events
+gmail-connector calendar add "Team standup" --start 2026-03-01T10:00:00 --end 2026-03-01T10:30:00
+gmail-connector calendar add "Day off" --date 2026-03-15  # All-day event
+gmail-connector calendar add "Lunch" --start 2026-03-01T12:00:00 --location "Cafe" --reminder 15
+gmail-connector calendar update <event-id> --summary "Updated meeting" --location "Room 2"
+gmail-connector calendar delete <event-id>         # Delete an event
 ```
 
 ## PM2 Scheduled Tasks
