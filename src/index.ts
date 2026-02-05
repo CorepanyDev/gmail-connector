@@ -5,9 +5,9 @@
  * A tool to manage Gmail accounts - organize, clean up, and analyze emails
  */
 
-function main(): void {
-  console.log('Gmail Connector CLI v1.0.0');
-  console.log('Use --help to see available commands');
-}
+import { run } from './cli';
 
-main();
+run().catch((err) => {
+  console.error('Fatal error:', err);
+  process.exit(1);
+});
