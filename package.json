@@ -25,13 +25,17 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "@types/open": "^6.1.0",
     "@typescript-eslint/eslint-plugin": "^6.19.0",
     "@typescript-eslint/parser": "^6.19.0",
     "eslint": "^8.56.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   },
-  "dependencies": {},
+  "dependencies": {
+    "googleapis": "^171.3.0",
+    "open": "^11.0.0"
+  },
   "engines": {
     "node": ">=18.0.0"
   }
