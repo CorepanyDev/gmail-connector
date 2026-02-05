@@ -12,3 +12,4 @@ export { createLabelCommand } from './label';
 export { createArchiveCommand } from './archive';
 export { createMarkCommand } from './mark';
 export { createTrashCommand } from './trash';
+export { createCleanupCommand } from './cleanup';
