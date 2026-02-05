@@ -101,6 +101,7 @@ interface AnalyzeSendersOptions {
   sort?: 'count' | 'size';
   domain?: boolean;
   json?: boolean;
+  all?: boolean;
 }
 
 /**
@@ -110,6 +111,7 @@ interface AnalyzeNewslettersOptions {
   since?: string;
   limit?: string;
   json?: boolean;
+  all?: boolean;
 }
 
 /**
@@ -197,6 +199,7 @@ export function createAnalyzeCommand(): Command {
     .option('--sort <by>', 'Sort by "count" (default) or "size"', 'count')
     .option('--domain', 'Group by domain instead of email address')
     .option('--json', 'Output as JSON')
+    .option('--all', 'Analyze all emails (default: inbox only)')
     .action(async (options: AnalyzeSendersOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
 
@@ -237,8 +240,12 @@ export function createAnalyzeCommand(): Command {
         // Get messages resource
         const messagesApi = await gmail.getMessages();
 
-        console.log('Analyzing inbox senders...');
+        const inboxOnly = !options.all;
+        const labelIds = inboxOnly ? ['INBOX'] : undefined;
+
+        console.log(`Analyzing ${inboxOnly ? 'inbox' : 'all'} senders...`);
         if (globalOpts.verbose) {
+          console.log(`  Scope: ${inboxOnly ? 'inbox only' : 'all emails'}`);
           console.log(`  Grouping by: ${options.domain ? 'domain' : 'email address'}`);
           console.log(`  Sorting by: ${sortBy}`);
           console.log(`  Limit: top ${limit}`);
@@ -258,6 +265,7 @@ export function createAnalyzeCommand(): Command {
             userId: 'me',
             maxResults: 500,
             pageToken,
+            labelIds,
           });
 
           const messages = listResponse.data.messages ?? [];
@@ -457,6 +465,7 @@ export function createAnalyzeCommand(): Command {
     .option('--since <time>', 'Only analyze emails from this time period (e.g., 30d, 6m, 1y)')
     .option('--limit <count>', 'Show top N senders', '50')
     .option('--json', 'Output as JSON')
+    .option('--all', 'Analyze all emails (default: inbox only)')
     .action(async (options: AnalyzeNewslettersOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
 
@@ -506,9 +515,15 @@ export function createAnalyzeCommand(): Command {
         // Get messages resource
         const messagesApi = await gmail.getMessages();
 
-        console.log('Analyzing newsletters and subscriptions...');
-        if (globalOpts.verbose && sinceDate) {
-          console.log(`  Time range: since ${sinceDate.toLocaleDateString()}`);
+        const inboxOnly = !options.all;
+        const labelIds = inboxOnly ? ['INBOX'] : undefined;
+
+        console.log(`Analyzing ${inboxOnly ? 'inbox' : 'all'} newsletters and subscriptions...`);
+        if (globalOpts.verbose) {
+          console.log(`  Scope: ${inboxOnly ? 'inbox only' : 'all emails'}`);
+          if (sinceDate) {
+            console.log(`  Time range: since ${sinceDate.toLocaleDateString()}`);
+          }
         }
 
         // Map to track newsletter statistics
@@ -526,6 +541,7 @@ export function createAnalyzeCommand(): Command {
             userId: 'me',
             maxResults: 500,
             pageToken,
+            labelIds,
             q: gmailQuery || undefined,
           });
 

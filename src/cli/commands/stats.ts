@@ -73,6 +73,7 @@ interface SenderStats {
  */
 interface StatsOptions {
   json?: boolean;
+  all?: boolean;
 }
 
 /**
@@ -82,6 +83,7 @@ export function createStatsCommand(): Command {
   const stats = new Command('stats')
     .description('Show inbox health metrics and summary')
     .option('--json', 'Output as JSON')
+    .option('--all', 'Analyze all emails (default: inbox only)')
     .action(async (options: StatsOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
 
@@ -170,7 +172,11 @@ export function createStatsCommand(): Command {
           trashCount = trashLabel.data.messagesTotal ?? 0;
         } catch { /* ignore */ }
 
+        const inboxOnly = !options.all;
+        const labelIds = inboxOnly ? ['INBOX'] : undefined;
+
         if (globalOpts.verbose && !options.json) {
+          console.log(`  Scope: ${inboxOnly ? 'inbox only' : 'all emails'}`);
           console.log('  Fetching email age distribution...');
         }
 
@@ -205,6 +211,7 @@ export function createStatsCommand(): Command {
             userId: 'me',
             maxResults: Math.min(500, sampleSize - sampledCount),
             pageToken,
+            labelIds,
           });
 
           const messages = listResponse.data.messages ?? [];

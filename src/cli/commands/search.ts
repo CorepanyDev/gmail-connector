@@ -183,6 +183,7 @@ interface SearchOptions {
   count?: boolean;
   json?: boolean;
   pageToken?: string;
+  all?: boolean;
 }
 
 /**
@@ -200,6 +201,7 @@ export function createSearchCommand(): Command {
     .option('-c, --count', 'Show only the count of matching emails')
     .option('--json', 'Output as JSON')
     .option('-p, --page-token <token>', 'Pagination token for next page')
+    .option('--all', 'Search all emails (default: inbox only)')
     .action(async (query: string, options: SearchOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
 
@@ -209,12 +211,20 @@ export function createSearchCommand(): Command {
 
       try {
         // Build the final query from base query and shortcut options
-        const finalQuery = buildQuery(query, {
+        const inboxOnly = !options.all;
+        let finalQuery = buildQuery(query, {
           from: options.from,
           to: options.to,
           subject: options.subject,
           hasAttachment: options.hasAttachment,
         });
+
+        // Add inbox filter unless --all is specified
+        if (inboxOnly && finalQuery) {
+          finalQuery = `in:inbox ${finalQuery}`;
+        } else if (inboxOnly) {
+          finalQuery = 'in:inbox';
+        }
 
         if (!finalQuery) {
           console.error('Error: No search query provided.');

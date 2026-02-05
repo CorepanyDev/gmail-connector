@@ -266,6 +266,7 @@ interface CleanupLargeOptions {
   limit?: string;
   delete?: boolean;
   yes?: boolean;
+  all?: boolean;
 }
 
 /**
@@ -277,6 +278,7 @@ interface CleanupOldOptions {
   limit?: string;
   delete?: boolean;
   yes?: boolean;
+  all?: boolean;
 }
 
 /**
@@ -294,6 +296,7 @@ export function createCleanupCommand(): Command {
     .option('--limit <count>', 'Maximum number of results to show', '50')
     .option('--delete', 'Trash found emails (with confirmation)')
     .option('-y, --yes', 'Skip confirmation when using --delete')
+    .option('--all', 'Search all emails (default: inbox only)')
     .action(async (options: CleanupLargeOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
 
@@ -343,13 +346,18 @@ export function createCleanupCommand(): Command {
         const messagesApi = await gmail.getMessages();
 
         // Search for large emails using Gmail size operator
-        const sizeQuery = `larger:${sizeThreshold}`;
+        const inboxOnly = !options.all;
+        const sizeQuery = inboxOnly
+          ? `larger:${sizeThreshold} in:inbox`
+          : `larger:${sizeThreshold}`;
+
         if (globalOpts.verbose) {
           console.log(`Searching with query: "${sizeQuery}"`);
           console.log(`Size threshold: ${formatSize(sizeThreshold)}`);
+          console.log(`Scope: ${inboxOnly ? 'inbox only' : 'all emails'}`);
         }
 
-        console.log(`Finding emails larger than ${formatSize(sizeThreshold)}...`);
+        console.log(`Finding ${inboxOnly ? 'inbox ' : ''}emails larger than ${formatSize(sizeThreshold)}...`);
 
         // Fetch message IDs matching size criteria
         let pageToken: string | undefined;
@@ -538,6 +546,7 @@ export function createCleanupCommand(): Command {
     .option('--limit <count>', 'Maximum number of results to show', '50')
     .option('--delete', 'Trash found emails (with confirmation)')
     .option('-y, --yes', 'Skip confirmation when using --delete')
+    .option('--all', 'Search all emails (default: inbox only)')
     .action(async (options: CleanupOldOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
 
@@ -587,20 +596,26 @@ export function createCleanupCommand(): Command {
         const messagesApi = await gmail.getMessages();
 
         // Build query with age filter and optional label filter
+        const inboxOnly = !options.all && !options.label; // If label specified, use that instead
         let query = ageThreshold.gmailQuery;
+
         if (options.label) {
           // Handle special labels like INBOX, SENT, etc.
           const labelQuery = options.label.toUpperCase() === options.label
             ? `in:${options.label.toLowerCase()}`
             : `label:${options.label}`;
           query = `${query} ${labelQuery}`;
+        } else if (inboxOnly) {
+          query = `${query} in:inbox`;
         }
 
         if (globalOpts.verbose) {
           console.log(`Searching with query: "${query}"`);
+          console.log(`Scope: ${options.label ? options.label : inboxOnly ? 'inbox only' : 'all emails'}`);
         }
 
-        console.log(`Finding emails older than ${options.olderThan}${options.label ? ` in "${options.label}"` : ''}...`);
+        const scopeLabel = options.label ? ` in "${options.label}"` : (inboxOnly ? ' in inbox' : '');
+        console.log(`Finding emails older than ${options.olderThan}${scopeLabel}...`);
 
         // Fetch message IDs matching age criteria
         let pageToken: string | undefined;

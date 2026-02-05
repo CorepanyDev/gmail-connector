@@ -1,7 +1,7 @@
 {
   "name": "gmail-connector",
   "version": "1.0.0",
-  "description": "CLI tool to manage Gmail accounts - organize, clean up, and analyze emails",
+  "description": "CLI tool to manage Gmail accounts and Google Tasks - organize, clean up, analyze emails, and manage tasks",
   "main": "dist/index.js",
   "bin": {
     "gmail-connector": "dist/index.js"

@@ -98,17 +98,26 @@ async function performFullSync(
   messages: gmail_v1.Resource$Users$Messages,
   messageRepo: MessageRepository,
   progress: ProgressBar,
-  verbose: boolean
+  verbose: boolean,
+  inboxOnly: boolean = true
 ): Promise<{ synced: number; historyId: string | null }> {
   let pageToken: string | undefined;
   let totalFetched = 0;
   let historyId: string | null = null;
   let estimatedTotal = 0;
 
+  // Filter to only inbox messages if requested
+  const labelIds = inboxOnly ? ['INBOX'] : undefined;
+
+  if (verbose && inboxOnly) {
+    console.log('Syncing inbox messages only (use --all to sync everything)');
+  }
+
   // First, get an estimate of total messages
   const initialList = await messages.list({
     userId: 'me',
     maxResults: 1,
+    labelIds,
   });
   estimatedTotal = initialList.data.resultSizeEstimate ?? 0;
 
@@ -125,6 +134,7 @@ async function performFullSync(
       userId: 'me',
       maxResults: 500, // Max allowed
       pageToken,
+      labelIds,
     });
 
     const messageList = listResponse.data.messages ?? [];
@@ -201,7 +211,8 @@ async function performIncrementalSync(
   messageRepo: MessageRepository,
   startHistoryId: string,
   progress: ProgressBar,
-  verbose: boolean
+  verbose: boolean,
+  inboxOnly: boolean = true
 ): Promise<{ added: number; deleted: number; historyId: string | null }> {
   let pageToken: string | undefined;
   let added = 0;
@@ -298,6 +309,14 @@ async function performIncrementalSync(
           format: 'metadata',
           metadataHeaders: ['Date', 'From', 'To', 'Subject'],
         });
+
+        // Skip non-inbox messages if inboxOnly is enabled
+        if (inboxOnly && !detail.data.labelIds?.includes('INBOX')) {
+          // Remove from cache if it was there (message was archived)
+          messagesToDelete.push(id);
+          return null;
+        }
+
         return messageToInput(detail.data);
       } catch (err) {
         // Message might have been deleted since
@@ -387,16 +406,19 @@ export function createSyncCommand(): Command {
   const sync = new Command('sync')
     .description('Sync emails from Gmail to local cache')
     .option('--full', 'Force full sync (ignore incremental state)', false)
+    .option('--all', 'Sync all messages (default: inbox only)', false)
     .action(
       async (
-        options: { full: boolean },
+        options: { full: boolean; all: boolean },
         cmd: Command
       ) => {
         const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
         const verbose = globalOpts.verbose;
 
+        const inboxOnly = !options.all;
+
         if (verbose) {
-          console.log('Sync options:', { full: options.full, config: globalOpts.config });
+          console.log('Sync options:', { full: options.full, all: options.all, config: globalOpts.config });
         }
 
         try {
@@ -466,7 +488,8 @@ export function createSyncCommand(): Command {
               messagesApi,
               messageRepo,
               progress,
-              verbose
+              verbose,
+              inboxOnly
             );
 
             // Update sync state
@@ -475,7 +498,7 @@ export function createSyncCommand(): Command {
               syncStateRepo.updateHistoryId(historyId);
             }
 
-            console.log(`\nFull sync complete: ${synced} messages synced`);
+            console.log(`\nFull sync complete: ${synced} messages synced${inboxOnly ? ' (inbox only)' : ''}`);
           } else {
             console.log('Starting incremental sync...');
 
@@ -486,7 +509,8 @@ export function createSyncCommand(): Command {
                 messageRepo,
                 syncState.last_history_id!,
                 progress,
-                verbose
+                verbose,
+                inboxOnly
               );
 
               // Update sync state
@@ -504,7 +528,8 @@ export function createSyncCommand(): Command {
                   messagesApi,
                   messageRepo,
                   progress,
-                  verbose
+                  verbose,
+                  inboxOnly
                 );
 
                 syncStateRepo.markFullSync(synced);
@@ -512,7 +537,7 @@ export function createSyncCommand(): Command {
                   syncStateRepo.updateHistoryId(historyId);
                 }
 
-                console.log(`\nFull sync complete: ${synced} messages synced`);
+                console.log(`\nFull sync complete: ${synced} messages synced${inboxOnly ? ' (inbox only)' : ''}`);
               } else {
                 throw err;
               }
