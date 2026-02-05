@@ -1,0 +1,38 @@
+{
+  "name": "gmail-connector",
+  "version": "1.0.0",
+  "description": "CLI tool to manage Gmail accounts - organize, clean up, and analyze emails",
+  "main": "dist/index.js",
+  "bin": {
+    "gmail-connector": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "gmail",
+    "cli",
+    "email",
+    "cleanup",
+    "organizer"
+  ],
+  "author": "Cemal Sert",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "eslint": "^8.56.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
