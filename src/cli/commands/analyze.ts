@@ -104,6 +104,85 @@ interface AnalyzeSendersOptions {
 }
 
 /**
+ * Analyze newsletters command options
+ */
+interface AnalyzeNewslettersOptions {
+  since?: string;
+  limit?: string;
+  json?: boolean;
+}
+
+/**
+ * Newsletter sender statistics
+ */
+interface NewsletterStats {
+  sender: string;
+  domain: string;
+  count: number;
+  hasUnsubscribe: boolean;
+  unsubscribeUrl?: string;
+  unsubscribeEmail?: string;
+  oldest: Date;
+  newest: Date;
+}
+
+/**
+ * Parse --since option into Date
+ * Supports: 30d, 6m, 1y, or ISO date string
+ */
+function parseSince(since: string): Date {
+  const now = new Date();
+
+  // Try parsing as relative time
+  const match = since.match(/^(\d+)([dwmy])$/i);
+  if (match) {
+    const value = parseInt(match[1], 10);
+    const unit = match[2].toLowerCase();
+
+    switch (unit) {
+      case 'd':
+        return new Date(now.getTime() - value * 24 * 60 * 60 * 1000);
+      case 'w':
+        return new Date(now.getTime() - value * 7 * 24 * 60 * 60 * 1000);
+      case 'm':
+        return new Date(now.getFullYear(), now.getMonth() - value, now.getDate());
+      case 'y':
+        return new Date(now.getFullYear() - value, now.getMonth(), now.getDate());
+    }
+  }
+
+  // Try parsing as ISO date string
+  const parsed = new Date(since);
+  if (!isNaN(parsed.getTime())) {
+    return parsed;
+  }
+
+  throw new Error(`Invalid --since format: ${since}. Use format like: 30d, 6m, 1y, or ISO date string`);
+}
+
+/**
+ * Parse List-Unsubscribe header value
+ * Can contain mailto: and/or http(s): URLs
+ */
+function parseUnsubscribeHeader(header: string): { url?: string; email?: string } {
+  const result: { url?: string; email?: string } = {};
+
+  // Find http/https URL
+  const urlMatch = header.match(/<(https?:\/\/[^>]+)>/);
+  if (urlMatch) {
+    result.url = urlMatch[1];
+  }
+
+  // Find mailto URL
+  const mailtoMatch = header.match(/<mailto:([^>]+)>/);
+  if (mailtoMatch) {
+    result.email = mailtoMatch[1];
+  }
+
+  return result;
+}
+
+/**
  * Create the analyze command with subcommands
  */
 export function createAnalyzeCommand(): Command {
@@ -351,6 +430,295 @@ export function createAnalyzeCommand(): Command {
         const topSendersTotal = topSenders.reduce((sum, s) => sum + s.count, 0);
         const topSendersSizeTotal = topSenders.reduce((sum, s) => sum + s.totalSize, 0);
         console.log(`Top ${topSenders.length} senders account for ${topSendersTotal.toLocaleString()} emails (${((topSendersTotal / totalProcessed) * 100).toFixed(1)}%) and ${formatSize(topSendersSizeTotal)}`);
+
+        process.exit(EXIT_CODES.SUCCESS);
+      } catch (err) {
+        if (err instanceof GmailServiceError) {
+          console.error(`Error: ${err.message}`);
+          if (err.code === 'not_authenticated') {
+            process.exit(EXIT_CODES.AUTHENTICATION_REQUIRED);
+          }
+        } else if (err instanceof Error) {
+          console.error(`Error: ${err.message}`);
+          if (globalOpts.verbose && err.stack) {
+            console.error(err.stack);
+          }
+        } else {
+          console.error('An unknown error occurred');
+        }
+        process.exit(EXIT_CODES.ERROR);
+      }
+    });
+
+  // Analyze newsletters subcommand
+  analyze
+    .command('newsletters')
+    .description('Detect newsletter subscriptions (emails with List-Unsubscribe header)')
+    .option('--since <time>', 'Only analyze emails from this time period (e.g., 30d, 6m, 1y)')
+    .option('--limit <count>', 'Show top N senders', '50')
+    .option('--json', 'Output as JSON')
+    .action(async (options: AnalyzeNewslettersOptions, cmd: Command) => {
+      const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
+
+      if (globalOpts.verbose) {
+        console.log('Analyze newsletters options:', { ...options, config: globalOpts.config });
+      }
+
+      try {
+        // Validate and parse limit
+        const limit = parseInt(options.limit ?? '50', 10);
+        if (isNaN(limit) || limit < 1) {
+          console.error('Error: --limit must be a positive integer');
+          process.exit(EXIT_CODES.INVALID_ARGUMENT);
+        }
+
+        // Parse since option if provided
+        let sinceDate: Date | undefined;
+        let gmailQuery = '';
+        if (options.since) {
+          sinceDate = parseSince(options.since);
+          // Gmail query uses YYYY/MM/DD format
+          const year = sinceDate.getFullYear();
+          const month = (sinceDate.getMonth() + 1).toString().padStart(2, '0');
+          const day = sinceDate.getDate().toString().padStart(2, '0');
+          gmailQuery = `after:${year}/${month}/${day}`;
+
+          if (globalOpts.verbose) {
+            console.log(`  Filtering emails after: ${sinceDate.toLocaleDateString()}`);
+          }
+        }
+
+        // Get Gmail service
+        const gmail = getGmailService({
+          credentialsPath: globalOpts.config,
+          verbose: globalOpts.verbose,
+        });
+
+        // Check authentication
+        const isAuthenticated = await gmail.isAuthenticated();
+        if (!isAuthenticated) {
+          console.error(
+            'Error: Not authenticated. Please run: gmail-connector auth login'
+          );
+          process.exit(EXIT_CODES.AUTHENTICATION_REQUIRED);
+        }
+
+        // Get messages resource
+        const messagesApi = await gmail.getMessages();
+
+        console.log('Analyzing newsletters and subscriptions...');
+        if (globalOpts.verbose && sinceDate) {
+          console.log(`  Time range: since ${sinceDate.toLocaleDateString()}`);
+        }
+
+        // Map to track newsletter statistics
+        const newsletterMap = new Map<string, NewsletterStats>();
+
+        // Fetch all messages with pagination
+        let pageToken: string | undefined;
+        let totalProcessed = 0;
+        let newsletterCount = 0;
+        const batchSize = 10;
+
+        do {
+          // List messages
+          const listResponse = await messagesApi.list({
+            userId: 'me',
+            maxResults: 500,
+            pageToken,
+            q: gmailQuery || undefined,
+          });
+
+          const messages = listResponse.data.messages ?? [];
+          pageToken = listResponse.data.nextPageToken ?? undefined;
+
+          if (messages.length === 0) {
+            break;
+          }
+
+          // Fetch message details in batches
+          for (let i = 0; i < messages.length; i += batchSize) {
+            const batch = messages.slice(i, i + batchSize);
+
+            const promises = batch.map(async (msg) => {
+              if (!msg.id) return null;
+
+              try {
+                const response = await messagesApi.get({
+                  userId: 'me',
+                  id: msg.id,
+                  format: 'metadata',
+                  metadataHeaders: ['From', 'Date', 'List-Unsubscribe', 'List-Unsubscribe-Post'],
+                });
+
+                const msgData = response.data;
+                const headers = msgData.payload?.headers;
+                const fromRaw = getHeader(headers, 'From');
+                const dateStr = getHeader(headers, 'Date');
+                const listUnsubscribe = getHeader(headers, 'List-Unsubscribe');
+
+                if (!fromRaw) return null;
+
+                const email = extractEmail(fromRaw);
+                const domain = extractDomain(email);
+                const date = new Date(dateStr);
+
+                return {
+                  from: fromRaw,
+                  email,
+                  domain,
+                  date: isNaN(date.getTime()) ? new Date() : date,
+                  listUnsubscribe,
+                  hasUnsubscribe: !!listUnsubscribe,
+                };
+              } catch {
+                return null;
+              }
+            });
+
+            const results = await Promise.all(promises);
+
+            for (const result of results) {
+              if (!result) continue;
+
+              // Only track emails with List-Unsubscribe header
+              if (!result.hasUnsubscribe) continue;
+
+              newsletterCount++;
+              const key = result.email;
+              const existing = newsletterMap.get(key);
+
+              // Parse unsubscribe header
+              const unsubscribeInfo = result.listUnsubscribe
+                ? parseUnsubscribeHeader(result.listUnsubscribe)
+                : {};
+
+              if (existing) {
+                existing.count++;
+                if (result.date < existing.oldest) {
+                  existing.oldest = result.date;
+                }
+                if (result.date > existing.newest) {
+                  existing.newest = result.date;
+                }
+                // Update unsubscribe info if not already set
+                if (!existing.unsubscribeUrl && unsubscribeInfo.url) {
+                  existing.unsubscribeUrl = unsubscribeInfo.url;
+                }
+                if (!existing.unsubscribeEmail && unsubscribeInfo.email) {
+                  existing.unsubscribeEmail = unsubscribeInfo.email;
+                }
+              } else {
+                newsletterMap.set(key, {
+                  sender: result.email,
+                  domain: result.domain,
+                  count: 1,
+                  hasUnsubscribe: true,
+                  unsubscribeUrl: unsubscribeInfo.url,
+                  unsubscribeEmail: unsubscribeInfo.email,
+                  oldest: result.date,
+                  newest: result.date,
+                });
+              }
+            }
+          }
+
+          totalProcessed += messages.length;
+
+          // Progress update every 500 messages
+          if (globalOpts.verbose || totalProcessed % 500 === 0) {
+            console.log(`  Processed ${totalProcessed} emails, found ${newsletterCount} newsletter emails...`);
+          }
+        } while (pageToken);
+
+        if (newsletterMap.size === 0) {
+          console.log('No newsletter subscriptions detected.');
+          console.log(`  Scanned ${totalProcessed.toLocaleString()} emails`);
+          process.exit(EXIT_CODES.SUCCESS);
+        }
+
+        // Convert to array and sort by count
+        const newslettersArray = Array.from(newsletterMap.values());
+        newslettersArray.sort((a, b) => b.count - a.count);
+
+        // Take top N
+        const topNewsletters = newslettersArray.slice(0, limit);
+
+        // Output results
+        if (options.json) {
+          const jsonOutput = {
+            totalEmailsScanned: totalProcessed,
+            totalNewsletterEmails: newsletterCount,
+            uniqueSenders: newsletterMap.size,
+            timeRange: sinceDate
+              ? {
+                  since: sinceDate.toISOString(),
+                  sinceFriendly: options.since,
+                }
+              : null,
+            newsletters: topNewsletters.map((n) => ({
+              sender: n.sender,
+              domain: n.domain,
+              count: n.count,
+              hasUnsubscribeLink: !!n.unsubscribeUrl,
+              hasUnsubscribeEmail: !!n.unsubscribeEmail,
+              unsubscribeUrl: n.unsubscribeUrl ?? null,
+              unsubscribeEmail: n.unsubscribeEmail ?? null,
+              oldest: n.oldest.toISOString(),
+              newest: n.newest.toISOString(),
+            })),
+          };
+          console.log(JSON.stringify(jsonOutput, null, 2));
+          process.exit(EXIT_CODES.SUCCESS);
+        }
+
+        // Display table
+        console.log('');
+        console.log(`Newsletter Subscriptions (${newsletterMap.size.toLocaleString()} unique senders found)`);
+        console.log(`Total emails scanned: ${totalProcessed.toLocaleString()}`);
+        console.log(`Total newsletter emails: ${newsletterCount.toLocaleString()}`);
+        if (sinceDate) {
+          console.log(`Time range: since ${sinceDate.toLocaleDateString()}`);
+        }
+        console.log('');
+
+        // Table header
+        const colWidths = {
+          sender: 40,
+          count: 8,
+          unsubscribe: 12,
+          newest: 12,
+        };
+
+        const headerLine = [
+          'SENDER'.padEnd(colWidths.sender),
+          'COUNT'.padStart(colWidths.count),
+          'UNSUBSCRIBE'.padEnd(colWidths.unsubscribe),
+          'LAST EMAIL'.padEnd(colWidths.newest),
+        ].join('  ');
+
+        console.log(headerLine);
+        console.log('─'.repeat(headerLine.length));
+
+        // Table rows
+        for (const newsletter of topNewsletters) {
+          const unsubStatus = newsletter.unsubscribeUrl
+            ? '✓ Link'
+            : newsletter.unsubscribeEmail
+            ? '✓ Email'
+            : '?';
+
+          const row = [
+            truncate(newsletter.sender, colWidths.sender).padEnd(colWidths.sender),
+            newsletter.count.toLocaleString().padStart(colWidths.count),
+            unsubStatus.padEnd(colWidths.unsubscribe),
+            formatDate(newsletter.newest.toISOString()).padEnd(colWidths.newest),
+          ].join('  ');
+          console.log(row);
+        }
+
+        console.log('');
+        console.log('Tip: Use "gmail-connector unsubscribe <sender>" to get unsubscribe links');
 
         process.exit(EXIT_CODES.SUCCESS);
       } catch (err) {
