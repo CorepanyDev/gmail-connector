@@ -14,6 +14,7 @@ import {
   createLabelCommand,
   createArchiveCommand,
   createMarkCommand,
+  createTrashCommand,
 } from './commands';
 import { EXIT_CODES } from './types';
 
@@ -50,6 +51,7 @@ export function createProgram(): Command {
   program.addCommand(createLabelCommand());
   program.addCommand(createArchiveCommand());
   program.addCommand(createMarkCommand());
+  program.addCommand(createTrashCommand());
 
   // Handle unknown commands
   program.on('command:*', (operands: string[]) => {
