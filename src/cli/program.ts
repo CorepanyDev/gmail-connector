@@ -22,6 +22,7 @@ import {
   createDownloadCommand,
   createTasksCommand,
   createCalendarCommand,
+  createServeCommand,
 } from './commands';
 import { EXIT_CODES } from './types';
 
@@ -66,6 +67,7 @@ export function createProgram(): Command {
   program.addCommand(createDownloadCommand());
   program.addCommand(createTasksCommand());
   program.addCommand(createCalendarCommand());
+  program.addCommand(createServeCommand());
 
   // Handle unknown commands
   program.on('command:*', (operands: string[]) => {

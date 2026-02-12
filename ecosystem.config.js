@@ -16,6 +16,8 @@
  *   GMAIL_CACHE_PATH - Path to cache database (default: ~/.gmail-connector/cache.db)
  *   GMAIL_VERBOSE - Enable verbose output (default: false)
  *   GMAIL_LOG_DIR - Directory for PM2 logs (default: ./logs)
+ *   API_KEY - API key for the REST API server (required for gmail-connector-api)
+ *   API_PORT - Port for the REST API server (default: 3000)
  */
 
 const path = require('path');
@@ -24,6 +26,7 @@ const path = require('path');
 const LOG_DIR = process.env.GMAIL_LOG_DIR || path.join(__dirname, 'logs');
 const CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH || './credentials.json';
 const VERBOSE = process.env.GMAIL_VERBOSE === 'true';
+const API_PORT = process.env.API_PORT || '3000';
 
 // Common environment variables passed to all jobs
 const commonEnv = {
@@ -35,6 +38,29 @@ const commonEnv = {
 
 module.exports = {
   apps: [
+    {
+      // REST API Server
+      // Long-running HTTP server exposing Gmail/Calendar/Tasks via REST API
+      name: 'gmail-connector-api',
+      script: 'dist/index.js',
+      args: `serve --port ${API_PORT}` + (VERBOSE ? ' --verbose' : ''),
+      cwd: __dirname,
+      autorestart: true,  // Restart on crash
+      watch: false,
+      max_restarts: 10,
+      min_uptime: '5s',
+      env: {
+        ...commonEnv,
+        API_KEY: process.env.API_KEY || '',
+      },
+      // Log configuration
+      output: path.join(LOG_DIR, 'api-out.log'),
+      error: path.join(LOG_DIR, 'api-error.log'),
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: true,
+      max_size: '10M',
+      retain: 7,
+    },
     {
       // Daily Sync Job
       // Runs every day at 6 AM to sync emails to local cache

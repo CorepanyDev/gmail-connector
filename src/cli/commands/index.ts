@@ -19,3 +19,4 @@ export { createStatsCommand } from './stats';
 export { createDownloadCommand } from './download';
 export { createTasksCommand } from './tasks';
 export { createCalendarCommand } from './calendar';
+export { createServeCommand } from './serve';

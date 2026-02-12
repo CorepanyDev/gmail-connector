@@ -12,7 +12,8 @@
     "dev": "ts-node src/index.ts",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "serve": "node dist/index.js serve"
   },
   "keywords": [
     "gmail",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/cli-progress": "^3.11.6",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.11.0",
     "@types/open": "^6.1.0",
     "@typescript-eslint/eslint-plugin": "^6.19.0",
@@ -38,6 +40,7 @@
     "better-sqlite3": "^12.6.2",
     "cli-progress": "^3.12.0",
     "commander": "^14.0.3",
+    "express": "^5.2.1",
     "googleapis": "^171.3.0",
     "open": "^11.0.0"
   },
